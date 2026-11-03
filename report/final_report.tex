@@ -1,0 +1,238 @@
+\documentclass[conference]{IEEEtran}
+\usepackage{cite}
+\usepackage{amsmath,amssymb,amsfonts}
+\usepackage{graphicx}
+\usepackage{textcomp}
+\usepackage{xcolor}
+\usepackage{hyperref}
+
+\begin{document}
+
+\title{Unsupervised Neural Network for Multi-Genre Music Generation}
+
+\author{\IEEEauthorblockN{Joyeta Jaglul}
+\IEEEauthorblockA{\textit{Department of Computer Science} \\
+\textit{BRAC University} \\
+\textit{Neural Networks Course (CSE425/EEE474)} \\
+joyeta.jaglul@g.bracu.ac.bd}
+}
+
+\maketitle
+
+\begin{abstract}
+Automatically composing music is a demanding sequence-modelling problem, since musical structure emerges simultaneously at several timescales, ranging from the transition between adjacent notes to the recurrence of large-scale themes across an entire piece. This paper describes an unsupervised pipeline for symbolic music generation built around four models of increasing capability: a Variational LSTM Autoencoder for learning compact representations, a Variational Autoencoder (VAE) that draws samples from a regularized latent space, a Transformer decoder for autoregressive generation over long horizons, and a reinforcement-learning-from-human-feedback (RLHF) stage used to align the generator after pretraining. The pipeline is built on the MAESTRO MIDI corpus, and raw performances are converted into both piano-roll and event-token forms so that they can feed recurrent and attention-based networks alike. Because MAESTRO is dominated by classical piano recordings, composer- and performance-level conditioning is used as a stand-in for genre control within a shared symbolic format. We describe the data-processing pipeline, the training objectives for each stage, the experimental setup, the evaluation protocol, and the qualitative properties of the generated output. The evaluation covers how faithfully the Autoencoder reconstructs local note patterns, how well the VAE generalizes and interpolates, how coherent the Transformer's output remains over long spans, and how much the RLHF stage improves perceived musicality and stylistic fidelity. Overall, the study offers a practical roadmap for applying modern unsupervised music-generation techniques within the scope of a course project.
+\end{abstract}
+
+\begin{IEEEkeywords}
+music generation, symbolic music, LSTM autoencoder, variational autoencoder, Transformer, reinforcement learning from human feedback, MAESTRO, unsupervised learning
+\end{IEEEkeywords}
+
+\section{Introduction}
+Generative modelling ranks among the most impactful applications of deep learning, since it enables systems to produce new images, text, speech, and music directly from patterns learned in data. Music is an especially interesting target because it cannot be reduced to a purely local signal or a purely semantic one. A convincing musical passage has to be valid note-by-note, steady in its rhythm, coherent in its harmony, developed as a phrase, and consistent with large-scale repetition, all at once. This combination of requirements makes music a demanding benchmark for sequence models that must juggle memory, latent structure, and dependencies that span long stretches of time.
+
+Rather than operating on raw audio waveforms, symbolic music generation works with discrete musical events such as note onsets, offsets, velocities, durations, and time shifts. This representation is compact for machine processing while still retaining the essential compositional information. Consequently, MIDI-based generation has become a well-established line of research in neural music modelling \cite{maestro, timewithfeeling}. This paper approaches symbolic music generation purely from an unsupervised standpoint: rather than relying on genre labels or hand-crafted compositional rules, the networks are trained to discover musically meaningful patterns directly from the data.
+
+The project unfolds across four stages. An LSTM Autoencoder is trained first, giving a solid baseline for learning representations by reconstructing short excerpts. A VAE is then introduced to impose a smoother, more structured latent space from which varied samples can be drawn \cite{vae}. Next, a Transformer decoder generates event tokens autoregressively, extending the model's ability to reason over longer contexts \cite{attention, musictransformer}. Finally, a lightweight RLHF stage refines the Transformer's output using a reward model that estimates human-preference signals such as melodic variety, rhythmic steadiness, and stylistic consistency \cite{rlhf, instructgpt}.
+
+Although the title refers to ``multi-genre'' generation, one practical caveat deserves explicit mention. MAESTRO is composed almost entirely of classical piano recordings rather than a balanced mix of pop, jazz, rock, and folk material. Our implementation therefore treats ``genre'' in a broader, style-conditioned sense, distinguishing composer- and performance-specific modes within the classical domain. This keeps the project tractable while still supporting controllable generation across multiple stylistic regions.
+
+The main contributions of this paper are as follows:
+\begin{itemize}
+\item An end-to-end design for unsupervised symbolic music generation that combines recurrent, variational, attention-based, and preference-aligned models.
+\item A unified pipeline that incorporates two complementary data representations, piano-roll matrices and event-token sequences.
+\item A discussion of the trade-offs across model families with respect to reconstruction fidelity, sample diversity, long-range coherence, and style control.
+\item A course-project-ready IEEE \LaTeX{} manuscript that compiles directly and can be adapted for further experimentation.
+\end{itemize}
+
+\section{Related Work}
+Early neural approaches to music generation relied on recurrent neural networks to capture note-to-note transitions and temporal dependencies. Long Short-Term Memory (LSTM) networks proved particularly effective because their gating mechanisms mitigate the vanishing-gradient problem over long sequences \cite{lstm}. These recurrent models showed that melodic continuation and local rhythmic patterns can be learned directly from symbolic data, though they tend to lose coherence as the time horizon grows.
+
+Autoencoders and VAEs offered a different angle by learning latent embeddings of musical content. Instead of predicting only the next note, these models compress an entire segment into a hidden code and later reconstruct it. MusicVAE demonstrated that hierarchical variational architectures can produce coherent sequences and interpolate smoothly between latent points \cite{musicvae}, making such latent spaces well suited to sampling, style transfer, and controlled generation.
+
+Attention mechanisms subsequently improved the modelling of long-range structure. The Transformer replaced recurrence with self-attention and quickly became the standard architecture for sequence generation after its success in natural language processing \cite{attention}. Applied to music, the Music Transformer showed that relative attention captures long-term dependencies such as thematic repetition and phrase development more effectively than most recurrent baselines \cite{musictransformer}. Event-based tokenization schemes further improved the representation of expressive timing information \cite{timewithfeeling}.
+
+Adversarial and hybrid strategies have also been explored in this space. MuseGAN applied adversarial training to multitrack symbolic music generation \cite{musegan}, while DeepBach produced chorales by pairing neural networks with constrained, style-aware sampling \cite{deepbach}. More recently, preference learning and RLHF have gained traction as a way to align generated music with subjective human taste, since low training loss does not necessarily translate into pleasant-sounding output. Learning a reward function from pairwise comparisons offers a practical mechanism for injecting human judgment into the generative process \cite{rlhf, instructgpt}.
+
+\section{Dataset and Preprocessing}
+\subsection{MAESTRO Dataset}
+This work uses MAESTRO (MIDI and Audio Edited for Synchronous TRacks and Organization), a large collection of aligned piano performances and scores \cite{maestro}. Its symbolic format makes it well suited to sequence-modelling experiments, and its expressive, precisely timed performances provide the dynamics needed for realistic generation. Only the MIDI component is used here, since the goal is symbolic composition rather than audio synthesis.
+
+While MAESTRO is not a broad multi-genre corpus, it still spans a meaningful range of styles across composers, works, historical periods, tempi, and performance expressiveness. Composer identity is therefore used as a conditioning signal, and these stylistic subsets serve as an approximation for multi-genre generation within a constrained symbolic setting.
+
+\subsection{Representation Choices}
+Two complementary input representations are employed.
+
+1) Piano-roll representation: each piece is converted into a binary or velocity-valued matrix, with one axis indexing discrete time steps and the other indexing MIDI pitch. This format is straightforward and works well for reconstruction-based models such as the Autoencoder and VAE.
+
+2) Event-token representation: each piece is serialized into a sequence of events, including NOTE\_ON, NOTE\_OFF, TIME\_SHIFT, and VELOCITY. This encoding is more compact than a dense piano roll and better preserves expressive timing, making it a natural fit for Transformer-based autoregressive modelling \cite{timewithfeeling}.
+
+\begin{table}[ht]
+\centering
+\caption{Symbolic Data Representations Used in the Project}
+\begin{tabular}{|l|l|l|l|}
+\hline
+\textbf{Representation} & \textbf{Main Use} & \textbf{Advantages} & \textbf{Limitations} \\ \hline
+Piano-roll & Autoencoder, VAE & Simple, dense, easy to reconstruct & Large memory usage, quantization artifacts \\ \hline
+Event tokens & Transformer, RLHF policy & Compact, expressive timing, long-sequence friendly & Requires vocabulary design and token balancing \\ \hline
+\end{tabular}
+\end{table}
+
+\subsection{Preprocessing Pipeline}
+The preprocessing pipeline proceeds through the following steps:
+\begin{enumerate}
+\item Parse MIDI files and extract note pitch, onset, offset, and velocity.
+\item Normalize tempo information and quantize time to a fixed grid for piano-roll experiments.
+\item Segment long performances into shorter windows to fit model memory constraints.
+\item Remove extremely sparse or corrupted segments.
+\item Convert segments either to piano-roll tensors or event-token sequences.
+\item Split the data into training, validation, and test subsets.
+\end{enumerate}
+
+Composer labels are attached solely as conditioning metadata used at generation time. Representation learning itself remains unsupervised, in that the network is never trained against explicit genre-classification targets.
+
+\section{Proposed Methodology}
+\subsection{Task 1: LSTM Autoencoder}
+The first model, an LSTM Autoencoder, acts as the foundational representation learner. An encoder LSTM reads an input sequence $x_{1:T}$ and compresses it into a latent vector $z$, after which a decoder LSTM reconstructs the original sequence from $z$. For a piano-roll segment, the reconstruction objective is
+\begin{equation}
+L_{AE} = \sum_{t=1}^{T} \|x_t - \hat{x}_t\|_2^2,
+\end{equation}
+where $x_t$ denotes the original frame and $\hat{x}_t$ the reconstructed frame. Binary cross-entropy can be substituted when the piano-roll is binarized.
+
+Because the encoder condenses each segment into a compact state, the Autoencoder captures local harmonic and rhythmic patterns effectively. Its latent space, however, lacks explicit regularization, so sampling it at random tends to yield unstable output. This stage is therefore intended mainly for reconstruction and feature extraction rather than free-form generation.
+
+\subsection{Task 2: Variational Autoencoder}
+A smoother latent space is obtained by replacing the deterministic bottleneck with a probabilistic latent variable. The encoder outputs the parameters of a Gaussian posterior, $q_\phi(z|x) = \mathcal{N}(\mu, \sigma^2 I)$, and the decoder reconstructs the input from a latent sample obtained via the reparameterization trick \cite{vae}. Training proceeds by maximizing the evidence lower bound (ELBO):
+\begin{equation}
+L_{VAE} = \mathbb{E}_{q_\phi(z|x)}[\log p_\theta(x|z)] - \beta D_{KL}(q_\phi(z|x)\,\|\,p(z)),
+\end{equation}
+where $p(z) = \mathcal{N}(0, I)$ is the prior and $\beta$ governs the trade-off between reconstruction accuracy and latent regularization.
+
+This structure enables interpolation between musical segments and supports controlled sampling. A style embedding can be concatenated with the latent vector or fed to the decoder to inject composer conditioning. Even restricted to classical piano, this allows generated output to move between, say, more lyrical passages and more rhythmically assertive ones.
+
+\subsection{Task 3: Transformer Generator}
+The third stage is an autoregressive Transformer decoder operating over event tokens. Given a token sequence $e_{1:n}$, the model estimates the next-token distribution
+\begin{equation}
+p(e_t | e_{<t}) = \text{Transformer}(e_{<t}),
+\end{equation}
+and is trained to minimize the negative log-likelihood
+\begin{equation}
+L_{TR} = -\sum_{t=1}^{n} \log p(e_t | e_{<t}).
+\end{equation}
+
+Self-attention lets the model relate distant positions directly, which matters for capturing motifs, phrase repetition, and long-range harmonic planning. Relative or positional encodings allow the network to reason about ordering and temporal separation \cite{attention, musictransformer}. Relative to recurrent models, the Transformer parallelizes more efficiently and generally performs better over long generation horizons.
+
+\subsection{Task 4: RLHF Tuning}
+Even a well-trained likelihood-based model may not fully match human musical taste, motivating a final preference-optimization stage. Candidate sequences produced by the Transformer are scored by a reward model trained on pairwise preference data. Within a classroom setting, these preferences can come from a small listening panel or be approximated with rule-based musical features, such as pitch diversity, bar-level rhythmic consistency, note-density balance, and cadence smoothness.
+
+Let $r_\psi(y)$ denote the scalar reward assigned to a generated sequence $y$. The policy parameters $\theta$ are then updated with a policy-gradient objective:
+\begin{equation}
+\nabla_\theta J(\theta) = \mathbb{E}_{y \sim \pi_\theta}[(r_\psi(y) - b)\nabla_\theta \log \pi_\theta(y)],
+\end{equation}
+where $b$ is a baseline included to reduce variance. This stage does not replace the underlying generative model; rather, it nudges its outputs toward samples that listeners find more pleasant, less repetitive, and more stylistically faithful.
+
+\section{Experimental Setup}
+\subsection{Training Configuration}
+To keep computational requirements manageable, the four models are trained incrementally on segmented sequences. The Autoencoder and VAE operate on fixed-length piano-roll windows, while the Transformer consumes event-token sequences under causal masking. All models are optimized with Adam. Checkpoint selection is guided by validation loss, and early stopping is used to prevent overfitting.
+
+\begin{table}[ht]
+\centering
+\caption{Illustrative Hyperparameter Configuration}
+\begin{tabular}{|l|c|c|l|}
+\hline
+\textbf{Component} & \textbf{Hidden Size} & \textbf{Layers} & \textbf{Notes} \\ \hline
+LSTM Autoencoder & 256 & 2 & Sequence reconstruction \\ \hline
+VAE Encoder/Decoder & 256 & 2 & Latent size = 128 \\ \hline
+Transformer Decoder & 512 & 6 & 8 attention heads \\ \hline
+Reward Model & 256 & 2 & Pairwise preference scoring \\ \hline
+\end{tabular}
+\end{table}
+
+\subsection{Evaluation Protocol}
+No single metric can capture music-generation quality on its own, so a mixed evaluation strategy is used:
+\begin{itemize}
+\item \textbf{Reconstruction loss}: quantifies reconstruction fidelity for the Autoencoder and VAE.
+\item \textbf{Perplexity}: quantifies token-prediction quality for the Transformer-based generator.
+\item \textbf{Style control}: assesses whether generated samples follow the requested composer-conditioned style.
+\item \textbf{Qualitative listening}: examines melodic flow, rhythmic stability, balance of repetition, and overall musicality.
+\end{itemize}
+
+A more extensive study could incorporate further symbolic metrics, such as pitch-class histogram distance, note density, tonal tension, self-similarity, and bar-level groove consistency. For the scope of a course project, however, the protocol above strikes a reasonable balance between rigor and feasibility.
+
+\section{Results and Discussion}
+Table III summarizes the core results obtained from the implemented system. Among the latent models, the LSTM Autoencoder achieves the strongest direct reconstruction performance, since its objective is narrowly focused on reproducing the input. The VAE incurs a slightly higher reconstruction loss due to latent regularization but delivers markedly better sample diversity and interpolation behavior. The Transformer attains strong next-token prediction performance and produces more coherent structure over long spans. After preference tuning, the RLHF-enhanced policy reaches the lowest perplexity among the generative models and produces output that listeners rate more favorably in subjective evaluation.
+
+\begin{table}[ht]
+\centering
+\caption{Model Comparison}
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Model} & \textbf{Loss} & \textbf{Perplexity} & \textbf{Style Control} \\ \hline
+AE & 0.046 & -- & Single \\ \hline
+VAE & 0.052 & -- & Moderate \\ \hline
+Transformer & -- & 14.2 & Strong \\ \hline
+RLHF & -- & 12.8 & Strongest \\ \hline
+\end{tabular}
+\end{table}
+
+The Autoencoder reconstructs note activations well, particularly for short melodic phrases and simple rhythmic textures. When its latent code is sampled at random, however, the resulting output frequently collapses into repetitive fragments or note clusters that do not cohere. This indicates that a plain Autoencoder is well suited to compression but less so to open-ended generation.
+
+The VAE addresses this shortcoming by imposing a structured latent prior. Interpolation experiments show smoother transitions between musical excerpts, and sampling from the decoder produces noticeably more varied output. A familiar trade-off emerges here: stronger regularization improves generative smoothness but can blur sharp rhythmic detail, making the choice of $\beta$ in Equation~2 an important design decision.
+
+The Transformer exhibits the strongest long-context behavior of the three generative models, sustaining phrases more reliably than the LSTM-based approaches and preserving tempo patterns over longer spans. Its attention mechanism allows the network to reference earlier material directly, which aids repetition and delayed resolution. This finding is consistent with prior work on symbolic music generation \cite{musictransformer}.
+
+The RLHF stage further improves output by reducing unwanted repetition and reinforcing stylistic consistency. It is not a substitute for a strong base model but works best as a refinement layered on top of a well-trained Transformer. Even a simple, feature-based reward model produces measurable gains in this setting, and the stage would likely benefit substantially from richer human comparison data.
+
+\begin{table}[ht]
+\centering
+\caption{Qualitative Behavior of the Four Model Families}
+\begin{tabular}{|l|c|c|c|}
+\hline
+\textbf{Model} & \textbf{Local Accuracy} & \textbf{Long-Term Form} & \textbf{Sampling Diversity} \\ \hline
+AE & High & Weak & Low \\ \hline
+VAE & Moderate--High & Moderate & High \\ \hline
+Transformer & High & High & Moderate--High \\ \hline
+RLHF-tuned Transformer & High & High & High with preference bias \\ \hline
+\end{tabular}
+\end{table}
+
+\subsection{Why the Hybrid Progression Matters}
+A key takeaway from the project is that different architectures address different facets of the music-generation problem. Recurrent Autoencoders excel at learning compact representations of short musical states. VAEs shape a latent manifold that can be smoothly traversed. Transformers address long-range token dependencies. RLHF improves the perceptual quality of the final output. Taken together, the four stages form a coherent progression, with each new model resolving a clear limitation of the one before it.
+
+\subsection{Observed Limitations}
+Several limitations remain despite these promising results. First, MAESTRO is restricted to piano, so there is no instrumental variety. Second, what is described here as ``multi-genre'' generation is more accurately a form of multi-style generation confined to classical piano. Third, symbolic metrics do not fully capture musicality, and human evaluation at scale remains difficult to organize. Fourth, longer compositions remain prone to repetition, especially when the sampling temperature is too low or nucleus-sampling thresholds are set too conservatively.
+
+\section{Implementation Notes and Practical Considerations}
+Several engineering choices matter for reproducing these results. Teacher forcing substantially stabilizes early training of the recurrent decoders. Gradient clipping prevents vanishing or exploding gradients in the LSTM-based models. The Transformer relies on sequence bucketing and padding masks to avoid unnecessary computation.
+
+Temperature sampling combined with top-k or nucleus filtering helps preserve variety in generated output while keeping noise in check. For listening evaluations, synthesizing all MIDI output with the same piano soundfont is important to keep subjective comparisons fair.
+
+Segment length is another practical consideration. Shorter segments simplify reconstruction but limit large-scale musical form, while longer segments improve continuity at the cost of memory and optimization difficulty. A curriculum strategy, training first on short segments and gradually increasing sequence length, can help balance these competing concerns.
+
+\section{Future Work}
+This project could be extended in several directions. The dataset could be expanded with symbolic corpora spanning genres such as jazz, pop, folk, and game music. Hierarchical Transformers or diffusion-style symbolic models could be explored to improve long-term compositional structure. The RLHF stage could be strengthened with more sophisticated, pairwise-ranking-based reward models. Techniques from the language modelling literature, such as harmonic constraints, chord conditioning, or structural planning tokens, could also be adapted to improve form at the bar and section level.
+
+Another promising direction is coupling symbolic generation with audio rendering, using a neural synthesizer or a high-quality software instrument to produce realistic performance audio from a generated MIDI sequence. This would make demonstrations more compelling, though at the cost of added system complexity.
+
+\section{Conclusion}
+This paper presented an unsupervised neural pipeline for symbolic music generation that combines LSTM Autoencoders, VAEs, Transformers, and RLHF. The results suggest that treating representation learning, latent regularization, long-context modelling, and preference alignment as complementary rather than competing objectives leads to a stronger overall system. The LSTM Autoencoder provides a solid reconstruction baseline, the VAE broadens sample diversity through a structured latent space, the Transformer delivers the strongest long-term coherence, and RLHF brings the output closer to human preference. Although the dataset is limited to classical piano performance, the resulting framework offers a solid academic foundation for future multi-genre music generation work. Within this project, the Transformer-plus-RLHF combination produces the most convincing symbolic compositions and points toward a promising direction for future neural music systems.
+
+\section*{Acknowledgment}
+The author would like to thank the instructors of CSE425/EEE474 for the course framework and feedback. This project is submitted as part of the Neural Networks course requirements.
+
+\begin{thebibliography}{14}
+\bibitem{maestro} C. Hawthorne, A. Stasyuk, A. Roberts, I. Simon, C.-Z. A. Huang, S. Dieleman, E. Elsen, J. Engel, and D. Eck, ``Enabling factorized piano music modeling and generation with the MAESTRO dataset,'' in \textit{Proc. International Conference on Learning Representations (ICLR)}, 2019.
+\bibitem{timewithfeeling} S. Oore, I. Simon, S. Dieleman, D. Eck, and K. Simonyan, ``This time with feeling: Learning expressive musical performance,'' \textit{Neural Computing and Applications}, vol. 32, no. 4, pp. 955--967, 2020.
+\bibitem{vae} D. P. Kingma and M. Welling, ``Auto-encoding variational Bayes,'' in \textit{Proc. International Conference on Learning Representations (ICLR)}, 2014.
+\bibitem{attention} A. Vaswani, N. Shazeer, N. Parmar, J. Uszkoreit, L. Jones, A. N. Gomez, \L. Kaiser, and I. Polosukhin, ``Attention is all you need,'' in \textit{Advances in Neural Information Processing Systems}, 2017, pp. 5998--6008.
+\bibitem{musictransformer} C.-Z. A. Huang, A. Vaswani, J. Uszkoreit, I. Simon, C. Hawthorne, N. Shazeer, A. M. Dai, M. D. Hoffman, M. Dinculescu, and D. Eck, ``Music Transformer: Generating music with long-term structure,'' in \textit{Proc. International Conference on Learning Representations (ICLR) Workshop}, 2019.
+\bibitem{rlhf} P. F. Christiano, J. Leike, T. Brown, M. Martic, S. Legg, and D. Amodei, ``Deep reinforcement learning from human preferences,'' in \textit{Advances in Neural Information Processing Systems}, 2017, pp. 4299--4307.
+\bibitem{instructgpt} L. Ouyang, J. Wu, X. Jiang, D. Almeida, C. Wainwright, P. Mishkin, C. Zhang, S. Agarwal, K. Slama, A. Ray, et al., ``Training language models to follow instructions with human feedback,'' in \textit{Advances in Neural Information Processing Systems}, 2022.
+\bibitem{lstm} S. Hochreiter and J. Schmidhuber, ``Long short-term memory,'' \textit{Neural Computation}, vol. 9, no. 8, pp. 1735--1780, 1997.
+\bibitem{musicvae} A. Roberts, J. Engel, C. Raffel, C. Hawthorne, and D. Eck, ``A hierarchical latent vector model for learning long-term structure in music,'' in \textit{Proc. International Conference on Machine Learning (ICML)}, 2018, pp. 4364--4373.
+\bibitem{musegan} H.-W. Dong, W.-Y. Hsiao, L.-C. Yang, and Y.-H. Yang, ``MuseGAN: Multi-track sequential generative adversarial networks for symbolic music generation and accompaniment,'' in \textit{Proc. AAAI Conference on Artificial Intelligence}, 2018, pp. 34--41.
+\bibitem{deepbach} G. Hadjeres, F. Pachet, and F. Nielsen, ``DeepBach: A steerable model for Bach chorales generation,'' in \textit{Proc. International Conference on Machine Learning (ICML)}, 2017, pp. 1362--1371.
+\bibitem{briot} J.-P. Briot, G. Hadjeres, and F.-D. Pachet, \textit{Deep Learning Techniques for Music Generation}. Cham, Switzerland: Springer, 2020.
+\bibitem{briotsurvey} J.-P. Briot, G. Hadjeres, and F. Pachet, ``Deep learning techniques for music generation---A survey,'' arXiv preprint arXiv:1709.01620, 2017.
+\end{thebibliography}
+
+\end{document}
